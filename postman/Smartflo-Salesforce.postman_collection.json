@@ -1,0 +1,775 @@
+{
+  "info": {
+    "name": "Smartflo + Salesforce click-to-call",
+    "description": "Tests the Smartflo APIs and the Salesforce webhook receiver. Fill the environment template with your own values and never commit them. Folder 2 places a real, billable call.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Smartflo auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/auth/login",
+            "description": "Generates a bearer token (valid about one hour).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{smartflo_email}}\",\n  \"password\": \"{{smartflo_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeds', () => {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.be.true;",
+                  "  pm.expect(res.access_token).to.be.a('string');",
+                  "  pm.environment.set('access_token', res.access_token);",
+                  "  pm.environment.set('token_expiry', Date.now() + res.expires_in * 1000);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/auth/refresh",
+            "description": "Bearer format works for refresh as well as click-to-call.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Refresh succeeds', () => {",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.be.true;",
+                  "  pm.environment.set('access_token', res.access_token);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh with invalid token (negative)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer not-a-real-token"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/auth/refresh",
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('Invalid token is rejected', () => pm.expect(body.success).to.not.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login with wrong password (negative, run sparingly)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/auth/login",
+            "description": "Repeated failed logins can lock the Smartflo account. Run this once at most.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{smartflo_email}}\",\n  \"password\": \"definitely-wrong\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('Wrong password is rejected', () => pm.expect(body.success).to.eql(false));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Smartflo click-to-call",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Log in automatically when the token is missing or about to expire",
+              "const expiry = parseInt(pm.environment.get('token_expiry') || '0', 10);",
+              "if (!pm.environment.get('access_token') || Date.now() > expiry - 60000) {",
+              "  pm.sendRequest({",
+              "    url: pm.environment.get('smartflo_base_url') + '/v1/auth/login',",
+              "    method: 'POST',",
+              "    header: { 'Content-Type': 'application/json', 'Accept': 'application/json' },",
+              "    body: { mode: 'raw', raw: JSON.stringify({ email: pm.environment.get('smartflo_email'), password: pm.environment.get('smartflo_password') }) }",
+              "  }, (err, res) => {",
+              "    if (!err && res.json().success) {",
+              "      pm.environment.set('access_token', res.json().access_token);",
+              "      pm.environment.set('token_expiry', Date.now() + res.json().expires_in * 1000);",
+              "    }",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Click to call (accepted)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/click_to_call",
+            "description": "BILLABLE: places a real call. Use your own phones. Remove the caller_id line if you have no caller ID to use. 'Accepted' only means queued, not answered.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_number\": \"{{agent_number}}\",\n  \"destination_number\": \"{{destination_number}}\",\n  \"caller_id\": \"{{caller_id}}\",\n  \"async\": 1,\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Request accepted', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const res = pm.response.json();",
+                  "  pm.expect(res.success).to.be.true;",
+                  "  pm.expect(res.ref_id).to.be.a('string');",
+                  "  pm.environment.set('ref_id', res.ref_id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Click to call without async (negative)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/click_to_call",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_number\": \"{{agent_number}}\",\n  \"destination_number\": \"{{destination_number}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('Rejected without async', () => pm.expect(body.success).to.not.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Click to call with invalid destination (negative)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{smartflo_base_url}}/v1/click_to_call",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_number\": \"{{agent_number}}\",\n  \"destination_number\": \"123\",\n  \"async\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('Invalid number rejected', () => {",
+                  "  pm.expect(body.success).to.not.eql(true);",
+                  "  pm.expect(String(body.message || '')).to.include('Destination number');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Salesforce webhook receiver",
+      "item": [
+        {
+          "name": "No token is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ref_id\":\"x\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('sf_test_ref_id', 'POSTMAN-' + Date.now());",
+                  "pm.environment.set('sf_test_ref_id_missed', 'POSTMAN-M-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 without token', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong token is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "wrong"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"ref_id\":\"x\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 with wrong token', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid JSON is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "this is not json",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 for invalid JSON', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown call is ignored",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "A call made outside Salesforce: no custom_identifier, no existing activity. Must return 200 so Smartflo does not retry.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"POSTMAN-UNKNOWN\",\n  \"call_status\": \"answered\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ignored_unknown_call', () => pm.expect(body.result).to.eql('ignored_unknown_call'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Agent answered",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "Arrives before any activity exists, so the opportunity is found through custom_identifier.sfid.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"Answered by agent\",\n  \"start_stamp\": \"2026-10-08 10:51:04\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ok_Agent Answered', () => pm.expect(body.result).to.eql('ok_Agent Answered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Customer answered",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"Answered by customer\",\n  \"answer_agent_number\": \"+910000000000\",\n  \"start_stamp\": \"2026-10-08 10:51:04\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ok_Customer Answered', () => pm.expect(body.result).to.eql('ok_Customer Answered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hangup, completed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"answered\",\n  \"billsec\": \"23\",\n  \"duration\": \"23\",\n  \"start_stamp\": \"2026-10-08 10:51:04\",\n  \"answer_stamp\": \"2026-10-08 10:51:04\",\n  \"end_stamp\": \"2026-10-08 10:51:27\",\n  \"answered_agent\": {\n    \"id\": \"1\"\n  },\n  \"answered_agent_name\": \"Test Agent\",\n  \"agent_ring_time\": \"8\",\n  \"customer_ring_time\": \"4\",\n  \"reason_key\": \"Call Disconnected By Caller\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ok_Completed', () => pm.expect(body.result).to.eql('ok_Completed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hangup replayed (idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "Sending the same event twice must not create a second activity. Verify in Salesforce that exactly one activity exists for this ref_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"answered\",\n  \"billsec\": \"23\",\n  \"duration\": \"23\",\n  \"start_stamp\": \"2026-10-08 10:51:04\",\n  \"answer_stamp\": \"2026-10-08 10:51:04\",\n  \"end_stamp\": \"2026-10-08 10:51:27\",\n  \"answered_agent\": {\n    \"id\": \"1\"\n  },\n  \"reason_key\": \"Call Disconnected By Caller\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ok_Completed', () => pm.expect(body.result).to.eql('ok_Completed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Late older event is ignored",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "An out-of-order 'agent answered' after 'completed' must not move the status backwards.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"Answered by agent\",\n  \"start_stamp\": \"2026-10-08 10:51:04\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ignored_stale', () => pm.expect(body.result).to.eql('ignored_stale'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hangup, nobody answered",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Webhook-Token",
+                "value": "{{webhook_token}}"
+              }
+            ],
+            "url": "{{sf_webhook_url}}",
+            "description": "Status rules for missed calls are assumptions until verified with real payloads.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ref_id\": \"{{sf_test_ref_id_missed}}\",\n  \"call_id\": \"POSTMAN-CALL\",\n  \"custom_identifier\": {\n    \"sfid\": \"{{sf_opportunity_id}}\",\n    \"usr\": \"{{sf_user_id}}\"\n  },\n  \"call_status\": \"missed\",\n  \"billsec\": \"0\",\n  \"duration\": \"0\",\n  \"start_stamp\": \"2026-10-08 11:00:00\",\n  \"end_stamp\": \"2026-10-08 11:00:20\",\n  \"answered_agent\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let body = {};",
+                  "try { body = pm.response.json(); } catch (e) {}",
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Result is ok_Missed by Agent', () => pm.expect(body.result).to.eql('ok_Missed by Agent'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
