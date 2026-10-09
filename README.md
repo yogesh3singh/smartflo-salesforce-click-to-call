@@ -89,4 +89,4 @@ The [Postman collection](postman/) covers the telephony API (login, refresh, cli
 Apex, Lightning Web Components, External and Named Credentials, Platform Cache, Custom Metadata, Experience Cloud, REST webhooks, Postman, GitHub Actions.
 
 ## Author
-<Your Name>, Salesforce developer. [LinkedIn](<your-linkedin-url>)
+<Your Name>, Salesforce developer. [LinkedIn](https://wwww.linkedin.com/in/yogesh3singh)
